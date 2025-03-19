@@ -125,9 +125,9 @@ class CifarResNet(nn.Module):
         layers = []
         if norm_num>0:
             count+=1
-            layers.append(block(self.inplanes, planes, stride, downsample,cgc=True))
-        else:
             layers.append(block(self.inplanes, planes, stride, downsample))
+        else:
+            layers.append(block(self.inplanes, planes, stride, downsample,cgc=True))
 
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
@@ -179,6 +179,14 @@ def cgc_resnet56(num_classes=10, norm_count=[3,3,3]):
     num_classes (uint): number of classes
   """
     model = CifarResNet(ResNetBasicblock, 56, num_classes, norm_count=norm_count)
+    return model
+
+def resnet56(num_classes=10):
+    """Constructs a ResNet-56 model for CIFAR-10 (by default)
+  Args:
+    num_classes (uint): number of classes
+  """
+    model = CifarResNet(ResNetBasicblock, 56, num_classes)
     return model
 
 def cgc_resnet110(num_classes=10, norm_count=[3,3,3]):

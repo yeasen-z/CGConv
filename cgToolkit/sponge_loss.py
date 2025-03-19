@@ -15,7 +15,12 @@ class SpongeMeter:
         self.args = args
 
     def register_output_stats(self, input):
-        inp = input.clone()
+        if all(tensor.shape[1:] == input[0].shape[1:] for tensor in input):
+            combined_input = torch.cat(input, dim=0)  # 沿 Batch 维度拼接
+        else:
+            raise ValueError("非 Batch 维度不一致，无法沿 Batch 维度拼接！")
+        inp=combined_input.clone()
+        # inp = input.clone()
 
         if self.args.sponge_criterion == 'l0':
             approx_norm_0 = torch.sum(inp ** 2 / (inp ** 2 + self.sigma)) / inp.numel()
