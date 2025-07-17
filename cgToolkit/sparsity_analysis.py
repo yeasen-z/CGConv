@@ -19,6 +19,9 @@ class LayersSparsityMeter:
         self.regular_zero = defaultdict(list)
         self.regular_zero_perc = defaultdict(list)
         
+        self.total_zero_num = defaultdict(list)
+        self.total_zero_perc = defaultdict(list)
+        
         # 记录此层特征图的大小
         self.HW_size = defaultdict(list)
         # 此层通道数
@@ -45,6 +48,9 @@ class LayersSparsityMeter:
         # 判断是否为零
         is_zero = (input_test == 0)  # shape: (N, C, H, W)
         zero_all_counts = is_zero.view(N, -1).sum(dim=1)
+        
+        self.total_zero_num[name].append(torch.sum(zero_all_counts).item()/N)
+        self.total_zero_perc[name].append(torch.sum( zero_all_counts).item() / (N*C*H*W) )
         
         # 对 H 和 W 维度求和，得到每个 channel 的零值数量
         channel_zero_counts = is_zero.sum(dim=(2, 3))  # shape: (N, C)
@@ -73,7 +79,6 @@ class LayersSparsityMeter:
         # print("zero_all_counts",zero_all_counts.shape)
         
         self.regular_zero[name].append(torch.sum(regular_zero_counts).item()/N)
-        
         self.regular_zero_perc[name].append(torch.mean(regular_zero_counts / zero_all_counts).item())
         
         # 计算非规则化的0
@@ -81,11 +86,17 @@ class LayersSparsityMeter:
         
         self.irregular_zero[name].append(torch.sum(irregular_zero_counts).item()/N)
         self.irregular_zero_perc[name].append(torch.mean(irregular_zero_counts / zero_all_counts).item())
+        
+        
     
     def avg_sparsity(self):
         for key in self.regular_zero_perc.keys():
+            self.total_zero_num[key] = np.mean(self.total_zero_num[key])
+            self.total_zero_num_perc[key] = np.mean(self.total_zero_num_perc[key])
+            self.regular_zero[key] = np.mean(self.regular_zero[key])
+            self.irregular_zero[key] = np.mean(self.irregular_zero[key])
             self.regular_zero_perc[key] = np.mean(self.regular_zero_perc[key])
-            self.irregular_zero_perc[key] = np.mean(self.regular_zero_perc[key])
+            self.irregular_zero_perc[key] = np.mean(self.irregular_zero_perc[key])
         
 
 
