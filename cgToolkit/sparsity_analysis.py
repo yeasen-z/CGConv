@@ -92,7 +92,7 @@ class LayersSparsityMeter:
     def avg_sparsity(self):
         for key in self.regular_zero_perc.keys():
             self.total_zero_num[key] = np.mean(self.total_zero_num[key])
-            self.total_zero_num_perc[key] = np.mean(self.total_zero_num_perc[key])
+            self.total_zero_perc[key] = np.mean(self.total_zero_perc[key])
             self.regular_zero[key] = np.mean(self.regular_zero[key])
             self.irregular_zero[key] = np.mean(self.irregular_zero[key])
             self.regular_zero_perc[key] = np.mean(self.regular_zero_perc[key])
