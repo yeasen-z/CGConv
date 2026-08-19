@@ -1,137 +1,136 @@
-import torch
-from collections import defaultdict
-import numpy as np
-import torch.nn.functional as F
+"""Analyse regular and irregular zeros in intermediate activations."""
 
-def remove_hooks(hooks):
-    """
-    Remove hooks from a model.
-    :param hooks: an Iterable containing hooks to be removed.
-    """
+from collections import defaultdict
+from typing import Iterable, Sequence, Union
+
+import numpy as np
+import torch
+from torch import Tensor
+
+
+def _merge_inputs(inputs: Union[Tensor, Sequence[Tensor]]) -> Tensor:
+    if isinstance(inputs, Tensor):
+        tensors = [inputs]
+    else:
+        tensors = list(inputs)
+    if not tensors or any(tensor.ndim != 4 for tensor in tensors):
+        raise ValueError("sparsity analysis expects one or more NCHW tensors")
+    if not all(tensor.shape[1:] == tensors[0].shape[1:] for tensor in tensors):
+        raise ValueError("non-batch activation dimensions must match")
+    return torch.cat(tensors, dim=0)
+
+
+def remove_hooks(hooks) -> None:
     for hook in hooks:
         hook.remove()
 
+
 class LayersSparsityMeter:
-    def __init__(self,th_ratio=0.97):
+    """Estimate how many zeros form channel- or position-level patterns."""
+
+    def __init__(self, th_ratio: float = 0.97):
+        if not 0 <= th_ratio <= 1:
+            raise ValueError("th_ratio must be between 0 and 1")
+        self.th_ratio = th_ratio
         self.irregular_zero = defaultdict(list)
         self.irregular_zero_perc = defaultdict(list)
-
         self.regular_zero = defaultdict(list)
         self.regular_zero_perc = defaultdict(list)
-        
         self.total_zero_num = defaultdict(list)
         self.total_zero_perc = defaultdict(list)
-        
-        # 记录此层特征图的大小
         self.HW_size = defaultdict(list)
-        # 此层通道数
         self.CH_len = defaultdict(list)
-        # 判断全0的百分比阈值
-        self.th_ratio = th_ratio
-      
-    def register_input_stats(self, name, input):
-        self.calculate_zero_map(name, input)
-                
-    def calculate_zero_map(self, name, input):
-        if all(tensor.shape[1:] == input[0].shape[1:] for tensor in input):
-            combined_input = torch.stack(input, dim=0)  # 沿 Batch 维度拼接
-        else:
-            raise ValueError("非 Batch 维度不一致，无法沿 Batch 维度拼接！")
-        
-        input_test=combined_input[0].clone()
-        # print(name,combined_input.shape)
-        N,C,H,W=input_test.shape
-        
-        self.HW_size[name].append(H*W)
-        self.CH_len[name].append(C)
-        
-        # 判断是否为零
-        is_zero = (input_test == 0)  # shape: (N, C, H, W)
-        zero_all_counts = is_zero.view(N, -1).sum(dim=1)
-        
-        self.total_zero_num[name].append(torch.sum(zero_all_counts).item()/N)
-        self.total_zero_perc[name].append(torch.sum( zero_all_counts).item() / (N*C*H*W) )
-        
-        # 对 H 和 W 维度求和，得到每个 channel 的零值数量
-        channel_zero_counts = is_zero.sum(dim=(2, 3))  # shape: (N, C)
-        # print("channel_zero_counts",channel_zero_counts.shape)
-        
-        # 计算channel上的 0 ratio
-        channel_zero_ratio = channel_zero_counts/(H*W)
-        channel_sparsity = (channel_zero_ratio >= self.th_ratio)  # shape: (N, C), dtype: bool
-        channel_sparsity_counts = channel_sparsity.sum(dim=1)
-        
-        # 对C进行求和，输出维度为 N, H, W
-        zero_cross_channel_counts = is_zero.sum(dim=1)        # 在 channel 维度求和，shape: (N, H, W)
-        
-        # 计算cross channel的 0 ratio
-        zero_cross_channel_ratio = zero_cross_channel_counts/(C)       # 在 channel 维度求和，shape: (N, H, W)
-        cross_channel_sparsity = (zero_cross_channel_ratio>self.th_ratio) # shape: (N, H, W)
-        cross_channel_sparsity_counts = cross_channel_sparsity.sum(dim=(1,2))
-        
-        # 计算规则化的0
-        # print("channel_sparsity_counts",channel_sparsity_counts.shape)
-        # print("cross_channel_sparsity_counts",cross_channel_sparsity_counts.shape)
-        regular_zero_counts = channel_sparsity_counts*(H*W) + \
-                        cross_channel_sparsity_counts*(C-channel_sparsity_counts)
-        
-        # print("regular_zero_counts",regular_zero_counts.shape)
-        # print("zero_all_counts",zero_all_counts.shape)
-        
-        self.regular_zero[name].append(torch.sum(regular_zero_counts).item()/N)
-        self.regular_zero_perc[name].append(torch.mean(regular_zero_counts / zero_all_counts).item())
-        
-        # 计算非规则化的0
-        irregular_zero_counts = zero_all_counts - regular_zero_counts
-        
-        self.irregular_zero[name].append(torch.sum(irregular_zero_counts).item()/N)
-        self.irregular_zero_perc[name].append(torch.mean(irregular_zero_counts / zero_all_counts).item())
-        
-        
-    
-    def avg_sparsity(self):
-        for key in self.regular_zero_perc.keys():
-            self.total_zero_num[key] = np.mean(self.total_zero_num[key])
-            self.total_zero_perc[key] = np.mean(self.total_zero_perc[key])
-            self.regular_zero[key] = np.mean(self.regular_zero[key])
-            self.irregular_zero[key] = np.mean(self.irregular_zero[key])
-            self.regular_zero_perc[key] = np.mean(self.regular_zero_perc[key])
-            self.irregular_zero_perc[key] = np.mean(self.irregular_zero_perc[key])
-        
+
+    def register_input_stats(self, name, inputs) -> None:
+        activation = _merge_inputs(inputs).detach()
+        batch, channels, height, width = activation.shape
+        spatial_size = height * width
+
+        self.HW_size[name].append(spatial_size)
+        self.CH_len[name].append(channels)
+
+        is_zero = activation.eq(0)
+        zero_counts = is_zero.flatten(1).sum(dim=1)
+        self.total_zero_num[name].append(float(zero_counts.float().mean()))
+        self.total_zero_perc[name].append(
+            float(zero_counts.sum() / (batch * channels * spatial_size))
+        )
+
+        channel_zero_ratio = is_zero.sum(dim=(2, 3)) / spatial_size
+        sparse_channels = channel_zero_ratio >= self.th_ratio
+        sparse_channel_counts = sparse_channels.sum(dim=1)
+
+        position_zero_ratio = is_zero.sum(dim=1) / channels
+        sparse_positions = position_zero_ratio >= self.th_ratio
+        sparse_position_counts = sparse_positions.sum(dim=(1, 2))
+
+        # This is a pattern-coverage estimate. Clamp it to the number of actual
+        # zeros so threshold overlap cannot create negative irregular counts.
+        regular_counts = sparse_channel_counts * spatial_size
+        regular_counts += sparse_position_counts * (
+            channels - sparse_channel_counts
+        )
+        regular_counts = torch.minimum(regular_counts, zero_counts)
+        irregular_counts = zero_counts - regular_counts
+        safe_zero_counts = zero_counts.clamp_min(1)
+
+        self.regular_zero[name].append(float(regular_counts.float().mean()))
+        self.irregular_zero[name].append(float(irregular_counts.float().mean()))
+        self.regular_zero_perc[name].append(
+            float((regular_counts / safe_zero_counts).float().mean())
+        )
+        self.irregular_zero_perc[name].append(
+            float((irregular_counts / safe_zero_counts).float().mean())
+        )
+
+    def avg_sparsity(self) -> None:
+        stores = (
+            self.total_zero_num,
+            self.total_zero_perc,
+            self.regular_zero,
+            self.regular_zero_perc,
+            self.irregular_zero,
+            self.irregular_zero_perc,
+            self.HW_size,
+            self.CH_len,
+        )
+        for store in stores:
+            for key, values in store.items():
+                store[key] = float(np.mean(values))
 
 
-def get_sparsity(model, inference_func, layer_list=[]):
+def get_sparsity(
+    model,
+    inference_func,
+    layer_list: Iterable[str] = (),
+    th_ratio: float = 0.97,
+):
+    """Run inference and collect sparsity statistics for named Conv2d layers."""
+    requested = set(layer_list)
+    selected = {
+        name: layer
+        for name, layer in model.named_modules()
+        if name in requested and isinstance(layer, torch.nn.Conv2d)
+    }
+    missing = requested.difference(selected)
+    if missing:
+        raise ValueError(f"unknown Conv2d layer names: {sorted(missing)}")
+
+    stats = LayersSparsityMeter(th_ratio=th_ratio)
     hooks = []
 
-    common_target_layer = []
-    common_target_name = []
-    for name, layer in model.named_modules():
-        if name in layer_list and isinstance(layer, torch.nn.Conv2d):
-            common_target_layer.append(layer)
-            common_target_name.append(name)
-
-    print(len(common_target_layer))
-    
-    stats = LayersSparsityMeter()
-    
     def hook_fn(name):
-        def register_stats_hook(model, input, output):
-            stats.register_input_stats(name, input)
+        def register_stats_hook(_module, inputs, _output):
+            stats.register_input_stats(name, inputs)
 
         return register_stats_hook
-    
-    ids = defaultdict(int)
 
-    for i, module in enumerate(common_target_layer):
-        module_name = str(module).split('(')[0]
-        # print(module_name)
-        hook = module.register_forward_hook(hook_fn(f'{module_name}-{ids[module_name]}'))
-        ids[module_name] += 1
-        hooks.append(hook)
+    for name, module in selected.items():
+        hooks.append(module.register_forward_hook(hook_fn(name)))
 
-    inference_func(model)
-    
+    try:
+        inference_func(model)
+    finally:
+        remove_hooks(hooks)
     stats.avg_sparsity()
-    
-    remove_hooks(hooks)
     return stats

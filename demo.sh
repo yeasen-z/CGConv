@@ -1,51 +1,32 @@
-#!/usr/bin/env 
+#!/usr/bin/env bash
+set -euo pipefail
 
-############### Host ##############################
-HOST=$(hostname)
-echo "Current host is: $HOST"
+# Override any setting through the environment, for example:
+#   EPOCHS=1 NGPU=0 DATA_PATH=./data bash demo.sh
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+DATA_PATH="${DATA_PATH:-./data}"
+SAVE_PATH="${SAVE_PATH:-./save/cifar10_cgc_resnet56}"
+ARCH="${ARCH:-cgc_resnet56}"
+EPOCHS="${EPOCHS:-200}"
+NGPU="${NGPU:-1}"
+GPU_ID="${GPU_ID:-0}"
+WORKERS="${WORKERS:-4}"
 
-# Automatic check the host and configure
-case $HOST in
-"alpha")
-    PYTHON="/mnt/data/anaconda3/envs/pytorch_2_0/bin/python" # python environment path
-    TENSORBOARD='/home/elliot/anaconda3/envs/pytorch041/bin/tensorboard' # tensorboard environment path
-    data_path='/mnt/data/zms/ICCV25/Train_models/data'
-    ;;
-esac
-
-DATE=`date +%Y-%m-%d`
-
-
-############### Configurations ########################
-enable_tb_display=false # enable tensorboard display
-model=cgc_resnet56
-dataset=cifar10
-epochs=500
-train_batch_size=128
-test_batch_size=128
-optimizer=SGD
-
-label_info=demo
-
-save_path=./save/${dataset}_${model}_${epochs}_${optimizer}_${label_info}
-tb_path=${save_path}/tb_log  #tensorboard log path
-
-PYTHON="/mnt/data/anaconda3/envs/pytorch_2_0/bin/python"
-data_path='/mnt/data/zms/ICCV25/Train_models/data'
-
-echo $PYTHON
-
-############### Neural network ############################
-{
-$PYTHON cg_train.py --dataset ${dataset} --data_path ${data_path}   \
-    --arch ${model} --save_path ${save_path} \
-    --epochs ${epochs} --learning_rate 0.01 \
-    --optimizer ${optimizer} \
-	--schedule 80 120 140 --gammas 0.1 0.1 0.2 \
-    --train_batch_size ${train_batch_size} \
-    --test_batch_size ${test_batch_size} \
-    --workers 4 --ngpu 1 --gpu_id 5 \
-    --print_freq 100 --decay 0.0005 --momentum 0.9 \
-    --cgc 
-}&
-wait
+"${PYTHON_BIN}" cg_train.py \
+  --dataset cifar10 \
+  --data_path "${DATA_PATH}" \
+  --arch "${ARCH}" \
+  --save_path "${SAVE_PATH}" \
+  --epochs "${EPOCHS}" \
+  --learning_rate 0.01 \
+  --schedule 80 120 \
+  --gammas 0.1 0.1 \
+  --train_batch_size 128 \
+  --test_batch_size 256 \
+  --workers "${WORKERS}" \
+  --ngpu "${NGPU}" \
+  --gpu_id "${GPU_ID}" \
+  --print_freq 100 \
+  --decay 0.0005 \
+  --momentum 0.9 \
+  --cgc

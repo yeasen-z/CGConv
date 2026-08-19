@@ -17,7 +17,7 @@ struct CONFIG_CI2SPCI{
     static const unsigned index_W=col_img_W;//对应的是滑动窗口对应在col_img下占有一列
     //使用sp_L记录spci长度的数组大小,每一个通道对应一个spci
     //index的存储结构为：
-    //index[CHin][col_img_H]
+    //index[CHin][col_img_W]
     //第一个索引下为输入特征图的通道
     //第二个索引为该通道下，col_img下该位置的展平滑动窗口，对应在spci下的位置，如果为0则记为-1
     //spci将保存中心不为0的展平窗口，并将其紧密排列，再将位置保存在index中
@@ -30,7 +30,7 @@ void get_ci_index(
     int sp_L[]//初始化为全0
 ){
     // col_img [CHin][col_img_H=Kh*Kw][col_img_W=Hout*Wout]
-    //index[CHin][col_img_H]
+    //index[CHin][col_img_W]
     for(int i=0;i<CONFIG_CI2SPCI::CHin;i++){
         for(int j=0;j<CONFIG_CI2SPCI::col_img_W;j++){
             //遍历每一个滑动窗口
@@ -39,10 +39,10 @@ void get_ci_index(
                         +j]!=0){
             // if(col_img[i][CONFIG_CI2SPCI::win_middle][j]!=0){
                 //如果中心不为0
-                index[i*CONFIG_CI2SPCI::col_img_H+j]=sp_L[i];
+                index[i*CONFIG_CI2SPCI::index_W+j]=sp_L[i];
                 sp_L[i]++;
             }else{
-                index[i*CONFIG_CI2SPCI::col_img_H+j]=-1;
+                index[i*CONFIG_CI2SPCI::index_W+j]=-1;
             }
         }
     }

@@ -3,8 +3,8 @@
 #include "testdata/testdata_easy.h"
 #include <iomanip>
 
-#ifndef _DEMO_CONV_SPMV_H_
-#define _DEMO_CONV_SPMV_H_
+#ifndef _DEMO_CONV_MV_H_
+#define _DEMO_CONV_MV_H_
 
 struct set_conv_spmv2:SET_CONV_SPMV{
     static const unsigned CHin=1,CHout=1;

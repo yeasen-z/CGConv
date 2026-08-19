@@ -1,97 +1,119 @@
+"""Activation sparsity regularisation used to train CGConv models."""
+
+from dataclasses import dataclass, field
+from typing import Iterable, Sequence, Union
+
 import torch
 import torch.nn.functional as F
+from torch import Tensor, nn
 
 
+def _merge_inputs(inputs: Union[Tensor, Sequence[Tensor]]) -> Tensor:
+    """Return one NCHW tensor from a module input or activation tensor."""
+    if isinstance(inputs, Tensor):
+        tensors = [inputs]
+    else:
+        tensors = list(inputs)
+
+    if not tensors:
+        raise ValueError("cannot calculate a sparsity loss without activations")
+    if any(tensor.ndim != 4 for tensor in tensors):
+        raise ValueError("the sparsity loss expects NCHW activations")
+    if not all(tensor.shape[1:] == tensors[0].shape[1:] for tensor in tensors):
+        raise ValueError("non-batch activation dimensions must match")
+    return torch.cat(tensors, dim=0)
+
+
+@dataclass
 class SpongeMeter:
-    def __init__(self, args):
-        self.loss = []
-        self.fired_perc = []
-        self.fired = []
-        self.l2 = []
-        self.src_loss = []
-        self.size = 0
+    """Collect differentiable sparsity losses and detached diagnostics."""
 
-        self.sigma = args.sponge_sigma
-        self.args = args
+    args: object
+    loss: list = field(default_factory=list)
+    fired_perc: list = field(default_factory=list)
+    fired: list = field(default_factory=list)
+    l2: list = field(default_factory=list)
 
-    def register_output_stats(self, input):
-        if all(tensor.shape[1:] == input[0].shape[1:] for tensor in input):
-            combined_input = torch.cat(input, dim=0)  # 沿 Batch 维度拼接
+    def register_output_stats(
+        self, inputs: Union[Tensor, Sequence[Tensor]]
+    ) -> None:
+        activation = _merge_inputs(inputs)
+
+        if self.args.sponge_criterion == "l0":
+            sigma = self.args.sponge_sigma
+            approx_l0 = (activation.square() / (activation.square() + sigma)).mean()
+        elif self.args.sponge_criterion == "l2":
+            channels = activation.shape[1]
+            windows = F.unfold(
+                activation, kernel_size=3, dilation=1, padding=1, stride=1
+            ).view(activation.shape[0], channels, 3, 3, -1)
+            approx_l0 = windows.var(dim=(2, 3), unbiased=False).mean()
         else:
-            raise ValueError("非 Batch 维度不一致，无法沿 Batch 维度拼接！")
-        inp=combined_input.clone()
-        # inp = input.clone()
+            raise ValueError(
+                f"unknown sponge criterion: {self.args.sponge_criterion!r}"
+            )
 
-        if self.args.sponge_criterion == 'l0':
-            approx_norm_0 = torch.sum(inp ** 2 / (inp ** 2 + self.sigma)) / inp.numel()
-        elif self.args.sponge_criterion == 'l2':
-            N, C, H, W = inp.shape
-            in_unfolded=F.unfold(inp, kernel_size=3, dilation=1, padding=1,stride=1)
-            in_unfolded_k = in_unfolded.view(N, C, 3, 3, -1)
-            in_unfolded_NCLKK = in_unfolded_k.permute(0, 1, 4, 2, 3)
-            in_unfolded_var = torch.var(in_unfolded_NCLKK, dim=(-2, -1))
-            var_sum = torch.sum(in_unfolded_var)
-            approx_norm_0=var_sum/inp.numel()
-        else:
-            raise ValueError('Invalid sponge criterion loss')
-
-        fired = inp.detach().norm(0)
-        fired_perc = fired / inp.detach().numel()
-
-        self.loss.append(approx_norm_0)
+        detached = activation.detach()
+        fired = detached.count_nonzero()
+        self.loss.append(approx_l0)
         self.fired.append(fired)
-        self.fired_perc.append(fired_perc)
-        self.l2.append(inp.detach().norm(2))
-        self.size += 1
-
-    def register_stats(self, stats):
-        sponge_loss, src_loss, fired, fired_perc, l2 = stats
-        self.loss.append(sponge_loss)
-        self.src_loss.append(src_loss)
-        self.fired.append(fired)
-        self.fired_perc.append(fired_perc)
-        self.l2.append(l2)
-        self.size += 1
+        self.fired_perc.append(fired / detached.numel())
+        self.l2.append(detached.norm(2))
 
 
-def register_hooks(leaf_nodes, hook):
-    hooks = []
-    for i, node in enumerate(leaf_nodes):
-        if not isinstance(node, torch.nn.modules.dropout.Dropout):
-            hooks.append(node.register_forward_hook(hook))
-    return hooks
+def register_hooks(leaf_nodes: Iterable[nn.Module], hook):
+    """Register a forward hook on every selected module."""
+    return [node.register_forward_hook(hook) for node in leaf_nodes]
 
-def remove_hooks(hooks):
+
+def remove_hooks(hooks) -> None:
     for hook in hooks:
         hook.remove()
 
 
-def do_sponge_loss(model, x, victim_leaf_nodes, args):
+def do_sponge_loss(model, inputs, victim_leaf_nodes, args):
+    """Run one forward pass and return its sparsity penalty and output.
+
+    ``victim_leaf_nodes`` should normally be the model's ``CGConv2d`` layers.
+    Their forward inputs are exactly the activations inspected by CGConv.
+    """
     sponge_stats = SpongeMeter(args)
 
-    def register_stats_hook(model, input, output):
-        sponge_stats.register_output_stats(input)
+    def register_stats_hook(_module, module_inputs, _output):
+        sponge_stats.register_output_stats(module_inputs)
 
     hooks = register_hooks(victim_leaf_nodes, register_stats_hook)
+    try:
+        outputs = model(inputs)
+    finally:
+        remove_hooks(hooks)
 
-    outputs = model(x)
+    if not sponge_stats.loss:
+        raise ValueError(
+            "no activations were collected; select a model containing CGConv2d "
+            "layers or disable --cgc"
+        )
 
-    sponge_loss = fired_perc = fired = l2 = 0
-    for i in range(len(sponge_stats.loss)):
-        sponge_loss += sponge_stats.loss[i].to('cuda')
-        fired += float(sponge_stats.fired[i])
-        fired_perc += float(sponge_stats.fired_perc[i])
-        l2 += float(sponge_stats.l2[i])
-    remove_hooks(hooks)
+    output_device = outputs.device
+    sponge_loss = torch.stack(
+        [layer_loss.to(output_device) for layer_loss in sponge_stats.loss]
+    ).mean()
+    sponge_loss = sponge_loss * args.sponge_lb
 
-    sponge_loss /= len(sponge_stats.loss)
-    fired_perc /= len(sponge_stats.loss)
+    fired = sum(float(value) for value in sponge_stats.fired)
+    fired_perc = sum(float(value) for value in sponge_stats.fired_perc)
+    fired_perc /= len(sponge_stats.fired_perc)
+    l2 = sum(float(value) for value in sponge_stats.l2)
+    diagnostics = (float(sponge_loss.detach()), fired, fired_perc, l2)
+    return sponge_loss, outputs, diagnostics
 
-    sponge_loss *= args.sponge_lb
-    return sponge_loss, outputs, (float(sponge_loss), fired, fired_perc, l2)
 
-
-def compute_sponge_loss(model, inputs, victim_leaf_nodes,args):
-    sponge_loss, _, sponge_stats = do_sponge_loss(model, inputs, victim_leaf_nodes,args)
-    sponge_stats = dict(sponge_loss=float(sponge_loss), sponge_stats=sponge_stats)
-    return sponge_loss, sponge_stats
+def compute_sponge_loss(model, inputs, victim_leaf_nodes, args):
+    """Compatibility wrapper returning only the penalty and diagnostics."""
+    sponge_loss, _, diagnostics = do_sponge_loss(
+        model, inputs, victim_leaf_nodes, args
+    )
+    return sponge_loss, {
+        "sponge_loss": float(sponge_loss.detach()),
+        "sponge_stats": diagnostics,
+    }

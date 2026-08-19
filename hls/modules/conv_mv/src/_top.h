@@ -3,8 +3,8 @@
 #include "gemm.h"
 #include "col2res.h"
 
-#ifndef _CONV_SPMV_H_
-#define _CONV_SPMV_H_
+#ifndef _CONV_MV_H_
+#define _CONV_MV_H_
 
 /*
 使用SPMV的卷积层包裹
@@ -30,13 +30,13 @@ struct SET_CONV_SPMV{
 
 struct CONFIG_CONV_SPMV:SET_CONV_SPMV{
     //其他通过计算得到的参数
-    static const unsigned Ph=(if_pad==0?0:(Kw-1)/2),Pw=(if_pad==0?0:(Kh-1)/2);//padding
+    static const unsigned Ph=(if_pad==0?0:(Kh-1)/2),Pw=(if_pad==0?0:(Kw-1)/2);//padding
     static const unsigned Hout=(Hin+2*Ph-Kh)/Sh+1, Wout=(Win+2*Pw-Kw)/Sw+1;//最终输出,输出维度为[CHout][Hout][Wout]
     static const unsigned col_img_H=Kw*Kh, col_img_W=Hout*Wout;//中间col_img变量，维度为[CHin][Kw*Kh][Hout*Wout]
     static const unsigned col_ker_H=CHout, col_ker_W=Kh*Kw;//中间col_ker变量，维度为[CHin][CHout][Kh*Kw]
     static const unsigned col_res_H=CHout, col_res_W=Hout*Wout;//中间res变量，维度为[CHout][Hout*Wout]
 
-    static const unsigned win_middle=col_img_H/2+1;//滑动窗口的中心位置索引
+    static const unsigned win_middle=col_img_H/2;//滑动窗口的中心位置索引
     static const unsigned index_H=CHin;//对应的是Chin，每一个通道对应一个H的索引
     static const unsigned index_W=col_img_W;//对应的是滑动窗口对应在col_img下占有一列
 };

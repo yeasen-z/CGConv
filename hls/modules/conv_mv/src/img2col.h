@@ -68,8 +68,8 @@ void img2col(
     typename CONFIG_Img2col::Dtype_f img[],
     typename CONFIG_Img2col::Dtype_f img_col[]
 ){
-    int paded_H=CONFIG_Img2col::Hin+2*CONFIG_Img2col::Ph;
-    int paded_W=CONFIG_Img2col::Win+2*CONFIG_Img2col::Pw;
+    static const unsigned paded_H=CONFIG_Img2col::Hin+2*CONFIG_Img2col::Ph;
+    static const unsigned paded_W=CONFIG_Img2col::Win+2*CONFIG_Img2col::Pw;
     typename CONFIG_Img2col::Dtype_f img_paded[CONFIG_Img2col::CHin * paded_H * paded_W];
     do_padding<CONFIG_Img2col>(img, img_paded);
 
